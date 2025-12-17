@@ -1,12 +1,8 @@
-"""
-_*_CODING:UTF-8_*_
-@Author: Yu Hou
-@File: PMC_VQA.py
-@Time: 9/29/25; 7:56 PM
-"""
+"""Evaluation utilities for the PMC-VQA benchmark."""
 import os, re, json, time, random, base64, mimetypes
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Any, Optional
+from pathlib import Path
 
 import pandas as pd
 from tqdm import tqdm
@@ -14,41 +10,31 @@ from openai import OpenAI
 import shutil
 
 
-def generate_image_subset():
-    # 原始图片大文件夹
-    SRC_DIR = "/Users/hou00127/Google/Works/2025/Benchmarks/version_2/PMC_VQA/images"
+def generate_image_subset(source_dir: Path, destination_dir: Path, csv_path: Path) -> None:
+    """Copy only the images referenced in the CSV (plus few-shot examples) to a smaller folder."""
+    destination_dir.mkdir(parents=True, exist_ok=True)
 
-    # 新的目标文件夹
-    DST_DIR = "/Users/hou00127/Google/Works/2025/Benchmarks/version_2/PMC_VQA/image_subset"
-    os.makedirs(DST_DIR, exist_ok=True)
-
-    # 读取 test_clean.csv
-    csv_path = "/Users/hou00127/Google/Works/2025/Benchmarks/version_2/PMC_VQA/test_clean.csv"
     df = pd.read_csv(csv_path)
 
-    # 从 Figure_path 列中提取文件名
     figure_files = set(df["Figure_path"].astype(str).tolist())
 
-    # one-shot / five-shot 示例图片
     extra_examples = {
         "PMC1064097_F1.jpg",
         "PMC1064097_F2.jpg",
         "PMC1064097_F4.jpg",
         "PMC1064097_F6.jpg",
-        "PMC1064097_F7.jpg"
+        "PMC1064097_F7.jpg",
     }
 
-    # 合并所有需要的图片
     all_needed = figure_files.union(extra_examples)
 
     print(f"Total images to copy: {len(all_needed)}")
 
-    # 执行拷贝
     missing = []
     for img_name in all_needed:
-        src_path = os.path.join(SRC_DIR, img_name)
-        dst_path = os.path.join(DST_DIR, img_name)
-        if os.path.exists(src_path):
+        src_path = source_dir / img_name
+        dst_path = destination_dir / img_name
+        if src_path.exists():
             shutil.copy(src_path, dst_path)
         else:
             missing.append(img_name)
@@ -61,22 +47,21 @@ def generate_image_subset():
 """
 Evaluate GPT-5 and GPT-4o on PMC-VQA (multiple-choice A/B/C/D).
 - Reads test_clean.csv
-- Loads images from local folder (base64 -> image_url data URI)
-- Supports 0/1/5-shot (few-shot部分需手动在build_prompt_mc里添加)
+- Loads images from a local folder (base64 -> image_url data URI)
+- Supports 0/1/5-shot (few-shot examples defined in build_prompt_mc)
 - Handles Answer_label anomalies
 """
 
 # ========= Paths =========
-TEST_CSV = "/Users/hou00127/Google/Works/2025/Benchmarks/version_2/PMC_VQA/test_clean.csv"  # 你的 test_clean.csv 路径
-IMAGES_DIR = "/Users/hou00127/Google/Works/2025/Benchmarks/version_2/PMC_VQA/image_subset"  # 图片文件夹（之前缩小过的）
-# TEST_CSV = "test_clean.csv"
-# IMAGES_DIR = "image_subset"
+DATA_DIR = Path(os.getenv("PMC_VQA_DIR", Path("data/PMC_VQA")))
+TEST_CSV = DATA_DIR / "test_clean.csv"
+IMAGES_DIR = DATA_DIR / "image_subset"
 
 
 # ========= Eval Config =========
 MODELS = ["gpt-5", "gpt-4o"]
-K_LIST = [0, 1, 5]  # 默认只跑 0-shot，你可以扩展到 [0,1,5]
-MAX_SAMPLES = None  # e.g., 100 for smoke test; None = 全部
+K_LIST = [0, 1, 5]  # Default runs 0-shot; extend to [0, 1, 5] as needed
+MAX_SAMPLES = None  # e.g., 100 for smoke test; None = full set
 RANDOM_SEED = 42
 TIMEOUT_S = 90
 
@@ -95,10 +80,8 @@ REFUSAL_PATTERNS = [
 ]
 
 # ========= OpenAI Client =========
-OPENAI_API_KEY = ""
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 # ========= Utilities =========
@@ -141,7 +124,7 @@ def norm_text(x: str) -> str:
 
 def resolve_answer_label(row: Dict[str, Any]) -> str:
     """
-    Return A/B/C/D; handle weird Answer_label (', ")
+    Return A/B/C/D; handle Answer_label anomalies like stray quotes.
     """
     label_raw = str(row.get("Answer_label", "")).strip().upper()
     if label_raw in ["A", "B", "C", "D"]:
@@ -174,15 +157,15 @@ def render_choices(a, b, c, d) -> str:
 
 def build_prompt_mc(question: str, a: str, b: str, c: str, d: str, k_shot: int = 0):
     """
-    构建多模态 MCQ Prompt
-    - 内置 few-shot 模板 (6 张图)，用户只需替换问题、选项、答案
+    Build a multimodal MCQ prompt.
+    Few-shot examples (6 images) are embedded below.
     """
     system_prompt = (
         "You are a board-certified clinician. Read the medical figure and answer the MCQ accurately."
     )
     parts: List[Dict[str, Any]] = []
 
-    # ===== Few-shot 示例模板 (6张图) =====
+    # ===== Few-shot templates (6 images) =====
     if k_shot > 0:
         few_shot_examples = [
             {
@@ -210,7 +193,7 @@ def build_prompt_mc(question: str, a: str, b: str, c: str, d: str, k_shot: int =
                 "final_answer": "B"
             },
             {
-                "figure": "PMC1064097_F6.jpg",  # 第二次出现
+                "figure": "PMC1064097_F6.jpg",
                 "question": "Example Q5: What is the name of the radiopharmaceutical used for scintimammography in the bottom row of the image?",
                 "choices": {"A": "99mTc-MIBI", "B": "99mTc-(V)DMSA", "C": "F-18 Sodium Fluoride", "D": "Fludeoxyglucose"},
                 "final_answer": "A"
@@ -254,6 +237,9 @@ def build_prompt_mc(question: str, a: str, b: str, c: str, d: str, k_shot: int =
 
 # ========= OpenAI call =========
 def call_model(system_prompt: str, user_parts: List[Dict[str, Any]], model: str) -> Dict[str, Any]:
+    if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not set. Please configure it before calling the API.")
+        
     start = time.time()
     try:
         resp = client.chat.completions.create(
@@ -357,17 +343,30 @@ def eval_model_on_df(model: str, df: pd.DataFrame, k_shot: int):
 
 # ========= Main =========
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PMC-VQA evaluation utilities.")
+    parser.add_argument("--export-metadata", type=Path, help="Optional path to export flattened test metadata CSV.")
+    parser.add_argument("--prepare-subset", action="store_true",
+                        help="Copy only the referenced images into the image_subset folder.")
+    parser.add_argument("--source-images", type=Path, default=DATA_DIR / "images",
+                        help="Folder containing the full set of PMC-VQA images.")
+    args = parser.parse_args()
+    
     random.seed(RANDOM_SEED)
     df_test = load_test_dataframe()
-    print(f"[INFO] Loaded {len(df_test)} test rows.")
-    df_test[["id",
-            "figure_path",
-            "question",
-            "A",
-            "B",
-            "C",
-            "D",
-            "gold_label"]].to_csv("/Users/hou00127/Google/Works/2025/Benchmarks/version_2/PMC_VQA/pmc_vqa/data.csv", index=False)
+    print(f"[INFO] Loaded {len(df_test)} test rows from {TEST_CSV}.")
+
+    if args.prepare_subset:
+        generate_image_subset(args.source_images, IMAGES_DIR, TEST_CSV)
+
+    if args.export_metadata:
+        df_test[["id", "figure_path", "question", "A", "B", "C", "D", "gold_label"]].to_csv(
+            args.export_metadata, index=False
+        )
+        print(f"[Saved] Exported metadata to {args.export_metadata}")
+
+    # Example evaluation loop (disabled by default to avoid unintended API usage):
     # summaries = []
     # for model in MODELS:
     #     for k in K_LIST:

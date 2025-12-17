@@ -1,22 +1,11 @@
-"""
-_*_CODING:UTF-8_*_
-@Author: Yu Hou
-@File: MedQA_USMLE.py
-@Time: 9/24/25; 10:44 AM
-"""
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Evaluation utilities for the MedQA (USMLE) benchmark."""
 
-"""
-Evaluate GPT-5 and GPT-4o on MedQA (USMLE).
-Assumption: always 4 options (A/B/C/D).
-For Hugging Face BigBio version (requires datasets<3.0).
-Outputs:
-  - results_medqa_<model>.csv
-  - summary_medqa.json
-"""
-
-import os, time, re, json
+import os
+import time
+import re
+import json
 import pandas as pd
 from datasets import load_dataset
 from tqdm import tqdm
@@ -25,11 +14,9 @@ from typing import List, Tuple
 from openai import OpenAI
 
 # ---------- CONFIG ----------
-# !!! Put your API key here !!!
-OPENAI_API_KEY = ""
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+# API key is read from the OPENAI_API_KEY environment variable.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # Models to evaluate
 MODELS = [
@@ -249,6 +236,9 @@ def load_medqa(max_samples=None, seed=42) -> pd.DataFrame:
 
 # ---------- OpenAI call ----------
 def call_gpt(system_prompt: str, user_prompt: str, model: str = "gpt-4o") -> dict:
+  if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not set. Please configure it before calling the API.")
+    
     start = time.time()
     try:
         response = client.chat.completions.create(
@@ -352,15 +342,14 @@ def eval_model_on_medqa(model: str, df: pd.DataFrame, k_shot: int = 0):
 
 def main():
     df = load_medqa(max_samples=MAX_SAMPLES)
-    # df.to_csv("/Users/hou00127/Google/Works/2025/Benchmarks/version_2/MedQA_USMLE/data.csv", index=False)
-    # summaries = []
-    # for model in MODELS:
-    #     for k_shot in [0, 1, 5]:
-    #         df_log, summary = eval_model_on_medqa(model, df, k_shot)
-    #         df_log.to_csv(f"results_medqa_{model}_{k_shot}.csv", index=False)
-    #         print(summary)
-    #         summaries.append(summary)
-    # with open("summary_medqa_k_shot.json", "w") as f: json.dump(summaries, f, indent=2)
+    summaries = []
+    for model in MODELS:
+       for k_shot in [0, 1, 5]:
+            df_log, summary = eval_model_on_medqa(model, df, k_shot)
+            df_log.to_csv(f"results_medqa_{model}_{k_shot}.csv", index=False)
+            print(summary)
+            summaries.append(summary)
+    with open("summary_medqa_k_shot.json", "w") as f: json.dump(summaries, f, indent=2)
 
 
 if __name__ == "__main__":

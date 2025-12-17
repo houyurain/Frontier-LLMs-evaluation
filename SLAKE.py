@@ -1,14 +1,6 @@
-"""
-_*_CODING:UTF-8_*_
-@Author: Yu Hou
-@File: SLAKE.py
-@Time: 10/6/25; 1:10 PM
-"""
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
-"""
-Evaluate GPT-5 and GPT-4o on SLAKE closed-type Yes/No questions.
+"""Evaluate GPT-5 and GPT-4o on SLAKE closed-type Yes/No questions.
 
 - Reads train.json (for few-shot pool) and test.json (for evaluation)
 - Filters only closed questions with answers "Yes"/"No"
@@ -17,6 +9,7 @@ Evaluate GPT-5 and GPT-4o on SLAKE closed-type Yes/No questions.
 """
 
 import os, re, json, time, base64, random, mimetypes
+from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Any, Optional
 import pandas as pd
@@ -24,11 +17,11 @@ from tqdm import tqdm
 from openai import OpenAI
 
 # ========== Configuration ==========
-# DATA_DIR = "/Users/hou00127/Google/Works/2025/Benchmarks/version_2/SLAKE"
-DATA_DIR = "./"
-TRAIN_JSON = os.path.join(DATA_DIR, "train.json")
-TEST_JSON = os.path.join(DATA_DIR, "test.json")
-IMAGES_DIR = os.path.join(DATA_DIR, "imgs")
+# Base directory can be overridden via SLAKE_DIR environment variable.
+DATA_DIR = Path(os.getenv("SLAKE_DIR", "data/SLAKE"))
+TRAIN_JSON = DATA_DIR / "train.json"
+TEST_JSON = DATA_DIR / "test.json"
+IMAGES_DIR = DATA_DIR / "imgs"
 
 MODELS = ["gpt-5", "gpt-4o"]
 K_LIST = [0, 1, 5]
@@ -37,8 +30,8 @@ MAX_SAMPLES = None
 TIMEOUT_S = 60
 RANDOM_SEED = 42
 
-OUTPUT_DIR = os.path.join(DATA_DIR, "results_slake_closed")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_DIR = DATA_DIR / "results_slake_closed"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 PRICING_PER_1K = {
     "gpt-5": {"input": 0.005, "output": 0.015},
@@ -55,10 +48,8 @@ REFUSAL_PATTERNS = [
 ]
 
 # ========== OpenAI client ==========
-OPENAI_API_KEY = ""
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 # ========== Utility functions ==========
@@ -68,8 +59,8 @@ def estimate_cost_usd(model, in_tokens, out_tokens):
 
 
 def img_to_data_url(img_rel):
-    path = os.path.join(IMAGES_DIR, img_rel)
-    if not os.path.exists(path):
+    path = IMAGES_DIR / img_rel
+    if not path.exists():
         return None
     mime, _ = mimetypes.guess_type(path)
     if mime is None: mime = "image/jpeg"
@@ -101,17 +92,17 @@ def is_refusal(text):
 def is_semantic_match(pred: str, gold: str) -> bool:
     if not pred or not gold:
         return False
-    # 1️⃣ 标准化大小写与空格
+    # 1) Normalize casing and whitespace
     p = pred.strip().lower()
     g = gold.strip().lower()
 
-    # 2️⃣ 统一MRI权重缩写
+    # 2) Normalize MRI weighting abbreviations
     p = re.sub(r"\bt1w\b", "t1", p)
     p = re.sub(r"\bt2w\b", "t2", p)
     g = re.sub(r"\bt1w\b", "t1", g)
     g = re.sub(r"\bt2w\b", "t2", g)
 
-    # 3️⃣ 去除常见修饰词
+    # 3) Remove common modifiers
     remove_words = ["weighted", "image", "scan", "mri", "ct", "x-ray", "xray",
                     "film", "photo", "picture", "slice", "view", "section"]
     for w in remove_words:
@@ -120,16 +111,16 @@ def is_semantic_match(pred: str, gold: str) -> bool:
     p = p.strip()
     g = g.strip()
 
-    # 4️⃣ 子串或集合匹配
+    # 4) Substring or set equality matches
     if p == g:
         return True
     if p in g or g in p:
         return True
-    # 同义词集合匹配（例如 “left lung” == “lung left”）
+    # Token set equality (e.g., "left lung" == "lung left")
     if set(p.split()) == set(g.split()):
         return True
 
-    # 5️⃣ 冠词/复数处理
+    # 5) Article/plural handling
     p = re.sub(r"\b(the|a|an)\b", "", p)
     g = re.sub(r"\b(the|a|an)\b", "", g)
     if p.rstrip("s") == g.rstrip("s"):
@@ -193,6 +184,9 @@ def build_prompt(question, img_url, subtype="yesno", k_shot=0, examples=None):
 
 
 def call_model(model, sys_p, parts):
+    if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not set. Please configure it before calling the API.")
+        
     start = time.time()
     try:
         r = client.chat.completions.create(
@@ -258,13 +252,14 @@ def eval_model(model, test_data, train_data, k_shot, max_samples=None):
     return pd.DataFrame([asdict(x) for x in logs])
 
 
-def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/version_2/SLAKE/", model="gpt-5"):
-    csv_path = data_folder + "results_slake_closed/results_slake_closed_" + model + "_k0.csv"
-    output_json = data_folder + "results_slake_closed/detailed_summary_slake_closed_" + model + ".json"
+def results_analysis(data_folder: str | os.PathLike = "data/SLAKE", model: str = "gpt-5"):
+    base_dir = Path(data_folder)
+    csv_path = base_dir / "results_slake_closed" / f"results_slake_closed_{model}_k0.csv"
+    output_json = base_dir / "results_slake_closed" / f"detailed_summary_slake_closed_{model}.json"
 
     df = pd.read_csv(csv_path)
     if "is_correct" not in df.columns:
-        raise ValueError("❌ CSV 缺少 'is_correct' 列，无法计算准确率。")
+        raise ValueError("❌ CSV must contain an 'is_correct' column to compute accuracy.")
 
     def get_summary(df, group_col):
         if group_col not in df.columns:
@@ -287,16 +282,16 @@ def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/v
         }
         return summary_dict
 
-    # --- 分项统计 ---
+    # --- Category-level summaries ---
     subtype_summary = get_summary(df, "subtype")
     modality_summary = get_summary(df, "modality")
     content_summary = get_summary(df, "content_type")
 
-    # --- 总体统计 ---
+    # --- Overall statistics ---
     overall_acc = df["is_correct"].mean()
     n_total = len(df)
 
-    # --- 组织 JSON ---
+    # --- Build JSON payload ---
     summary = {
         "dataset": "SLAKE (Closed-ended)",
         "model": "gpt-5",
@@ -307,18 +302,18 @@ def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/v
         "by_content_type": content_summary
     }
 
-    # --- 保存 JSON ---
+    # --- Save JSON ---
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
 
-    print(f"[✅] Summary JSON 已保存到: {output_json}")
+    print(f"[✅] Saved summary JSON to: {output_json}")
     print(f"Overall Accuracy: {overall_acc:.4f}\n")
 
-    print("📊 各 subtype：")
+    print("📊 Accuracy by subtype:")
     print(pd.DataFrame.from_dict(subtype_summary, orient="index"))
-    print("\n📊 各 modality：")
+    print("\n📊 Accuracy by modality:")
     print(pd.DataFrame.from_dict(modality_summary, orient="index"))
-    print("\n📊 各 content_type：")
+    print("\n📊 Accuracy by content_type:")
     print(pd.DataFrame.from_dict(content_summary, orient="index"))
 
 

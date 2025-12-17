@@ -1,15 +1,8 @@
-"""
-_*_CODING:UTF-8_*_
-@Author: Yu Hou (adapter by ChatGPT)
-@File: PubMedQA.py
-@Time: 2025-09-26
-"""
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Evaluate GPT-5 and GPT-4o on PubMedQA (yes/no/maybe).
 
-"""
-Evaluate GPT-5 and GPT-4o on PubMedQA (yes/no/maybe).
-This mirrors the structure and summary fields of your MedQA_USMLE.py, including:
+This mirrors the structure and summary fields of MedQA_USMLE.py, including:
   - call_gpt (latency + token usage)
   - is_refusal (pattern-based)
   - classify_errors (missing/inconsistent/hallucinated)
@@ -35,16 +28,13 @@ from typing import List, Tuple, Dict
 import pandas as pd
 from tqdm import tqdm
 
-# If you are using the new OpenAI SDK
 try:
     from openai import OpenAI
+except Exception:  # pragma: no cover - import guard for optional dependency
+    OpenAI = None  # type: ignore
 
-    OPENAI_API_KEY = ""
-    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
-    client = OpenAI(api_key=OPENAI_API_KEY)
-except Exception:
-    client = None  # Will raise if call_gpt is used without proper setup
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 
 # ---------- Pricing per 1K tokens ----------
 # Mirrors your MedQA script style; extend as needed.
@@ -165,7 +155,7 @@ def build_prompt_pubmedqa(question: str, contexts: List[str], k_shot: int = 0) -
 
 
 # ---------- Extraction (yes/no/maybe) ----------
-# 只在“最终答案语境”内提取 yes/no/maybe，避免把普通英文中的 "no" 误当标签
+# Extract labels only from explicit final-answer context to avoid false positives.
 FINAL_ANSWER_REGEX = re.compile(
     r"(?i)\b(?:final\s*answer|correct\s*answer|answer\s*(?:is|:))\b[^a-zA-Z]*(yes|no|maybe)\b"
 )
@@ -177,7 +167,7 @@ def extract_label_ynm(text: str) -> str:
     if m:
         return m.group(1).lower()
 
-    # 如果没有明确 Final Answer，就返回空，不要 fallback
+    # If there is no explicit final answer line, return empty to avoid false positives.
     return ""
 
 

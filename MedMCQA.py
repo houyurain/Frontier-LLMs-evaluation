@@ -1,21 +1,18 @@
-"""
-_*_CODING:UTF-8_*_
-@Author: Yu Hou
-@File: MedMCQA.py
-@Time: 9/26/25; 10:05 AM
-"""
+"""Evaluation helpers for the MedMCQA multiple-choice benchmark."""
 
-import os, time, re, json
+import os
+import time
+import re
+import json
+from pathlib import Path
 import pandas as pd
 from datasets import load_dataset
 from tqdm import tqdm
 from dataclasses import dataclass, asdict
 from openai import OpenAI
 
-OPENAI_API_KEY = ""
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # Models to evaluate
 MODELS = [
@@ -78,13 +75,13 @@ FINAL_ANSWER_REGEX = re.compile(
 
 
 def extract_choice(text: str) -> str:
-    """从 Final Answer 行提取 A/B/C/D，如果没有就返回空"""
+    """Extract the predicted A/B/C/D label from the final answer line."""
     m = FINAL_ANSWER_REGEX.search(text or "")
     return m.group(1).upper() if m else ""
 
 
 def has_conflicting_final_answers(text: str, pred: str, allowed_labels: set) -> bool:
-    """检查是否有多个相互矛盾的 Final Answer"""
+    """Check if multiple conflicting final answers are present in the output."""
     letters = {m.group(1).upper() for m in FINAL_ANSWER_REGEX.finditer(text or "")}
     contradictions = {l for l in letters if l in allowed_labels and l != pred}
     return len(contradictions) > 0
@@ -145,8 +142,8 @@ def _clean(s):
 
 def _map_cop_value_to_letter(v, num_opts=4):
     """
-    v: 单个 cop 值（int/str）
-    优先按 1 基（1->A，…），不在范围再按 0 基（0->A，…）
+    Map the raw `cop` value to an option letter.
+    Prefers 1-based indices (1->A) and falls back to 0-based (0->A).
     """
     if v is None:
         return None
@@ -163,10 +160,10 @@ def _map_cop_value_to_letter(v, num_opts=4):
     except Exception:
         return None
 
-    # 先按 1 基
+    # Prefer 1-based indices first
     if 1 <= vi <= num_opts:
         return "ABCD"[vi - 1]
-    # 再按 0 基
+    # Fall back to 0-based indices
     if 0 <= vi < num_opts:
         return "ABCD"[vi]
     return None
@@ -174,9 +171,8 @@ def _map_cop_value_to_letter(v, num_opts=4):
 
 def load_medmcqa(split="train", max_samples=None, seed=42) -> pd.DataFrame:
     """
-    适配 lighteval/med_mcqa（字段：question, exp, cop, opa, opb, opc, opd, subject_name, topic_name, id, choice_type）
-    注意：该镜像实测 gold 等价为“单选”。统一视为 single。
-    返回列：id, question, options(list[str]), gold(str), qtype("single"), meta(dict)
+    Load MedMCQA from Hugging Face (lighteval/med_mcqa).
+    Returns: id, question, options(list[str]), gold(str), qtype("single"), meta(dict))
     """
     ds = load_dataset("lighteval/med_mcqa", split=split)
     records = []
@@ -184,18 +180,18 @@ def load_medmcqa(split="train", max_samples=None, seed=42) -> pd.DataFrame:
         qid = str(ex.get("id", ""))
         question = _clean(ex.get("question", ""))
 
-        # 选项（A/B/C/D 顺序）
+        # Options (A/B/C/D order)
         options = [ex.get("opa"), ex.get("opb"), ex.get("opc"), ex.get("opd")]
         options = [_clean(o) for o in options if isinstance(o, str)]
         options = options[:4]
         if len(options) < 2 or not question:
             continue
 
-        # 正确答案（cop 可能为 -1 / 0-基 / 1-基）
+        # Correct answer (cop may be -1 / 0-based / 1-based）
         cop = ex.get("cop", None)
         gold_letter = _map_cop_value_to_letter(cop, num_opts=len(options))
         if gold_letter not in VALID_LETTERS:
-            continue  # 无效/缺失答案的样本跳过
+            continue  # skip invalid/missing answers
 
         meta = {
             "subject": _clean(ex.get("subject_name")),
@@ -204,10 +200,10 @@ def load_medmcqa(split="train", max_samples=None, seed=42) -> pd.DataFrame:
 
         records.append({
             "id": qid if qid else f"medmcqa_{len(records)}",
-            "question": question,  # 不拼 exp，避免泄露
+            "question": question,  # avoid concatenating explanations to prevent leakage
             "options": options,
-            "gold": gold_letter,  # 这里就是单个字母
-            "qtype": "single",  # 强制单选
+            "gold": gold_letter,
+            "qtype": "single",
             "meta": meta
         })
 
@@ -224,18 +220,18 @@ def load_medmcqa_stratified(split="train", samples_per_subject=200, seed=42) -> 
         qid = str(ex.get("id", ""))
         question = (ex.get("question") or "").strip()
 
-        # 选项（A/B/C/D 顺序）
+        # Options (A/B/C/D order)
         options = [ex.get("opa"), ex.get("opb"), ex.get("opc"), ex.get("opd")]
         options = [_clean(o) for o in options if isinstance(o, str)]
         options = options[:4]
         if len(options) < 2 or not question:
             continue
 
-        # 正确答案（cop 可能为 -1 / 0-基 / 1-基）
+        # Correct answer (cop may be -1 / 0-based / 1-based)
         cop = ex.get("cop", None)
         gold_letter = _map_cop_value_to_letter(cop, num_opts=len(options))
         if gold_letter not in VALID_LETTERS:
-            continue  # 无效/缺失答案的样本跳过
+            continue  # skip invalid/missing answers
 
         subject = (ex.get("subject_name") or "").strip()
         topic = (ex.get("topic_name") or "").strip()
@@ -252,7 +248,7 @@ def load_medmcqa_stratified(split="train", samples_per_subject=200, seed=42) -> 
 
     df = pd.DataFrame(records)
 
-    # ✅ 分层采样按 subject
+    # Stratified sampling by subject
     df_sampled = (
         df.groupby("subject")
         .apply(lambda g: g.sample(n=min(len(g), samples_per_subject), random_state=seed))
@@ -264,6 +260,9 @@ def load_medmcqa_stratified(split="train", samples_per_subject=200, seed=42) -> 
 
 # ---------- OpenAI call ----------
 def call_gpt(system_prompt: str, user_prompt: str, model: str = "gpt-4o") -> dict:
+    if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not set. Please configure it before calling the API.")
+        
     start = time.time()
     try:
         response = client.chat.completions.create(
@@ -302,30 +301,30 @@ def eval_model_on_medqa(model: str, df: pd.DataFrame, k_shot: int = 0):
         pred = extract_choice(text)
         gold = row.gold
 
-        # 初始化
+        # Initialize metrics
         is_correct = 0
         refusal = 0
         err_missing = 0
         err_inconsistent = 0
         err_hallucinated = 0
 
-        # Step 1: 判断是否答对
+        # Step 1: check correctness
         if pred and pred == gold:
             is_correct = 1
         else:
-            # Step 2: 判拒答
+            # Step 2: refusal detection
             if is_refusal(text):
                 refusal = 1
             else:
-                # Step 3: 判错误类型
+                # Step 3: classify error type
                 if not pred:
                     err_missing = 1
                 elif pred not in {"A", "B", "C", "D"}:
                     err_inconsistent = 1
                 elif pred != gold:
-                    # 合法但答错
+                    # valid but incorrect answer
                     err_inconsistent = 1
-                    # 检查是否有多个矛盾 Final Answer
+                    # detect multiple conflicting final answers
                     if has_conflicting_final_answers(text, pred, {"A", "B", "C", "D"}):
                         err_hallucinated = 1
 
@@ -382,17 +381,18 @@ def load_json_or_jsonl(path):
             return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
-def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/version_2/MedMCQA/", model="gpt-5"):
+def results_analysis(data_folder: Path | str, model: str = "gpt-5"):
     # ---------- Paths ----------
-    test_json_path = data_folder + "train.json"  # 原始测试集
-    result_csv_path = data_folder + "results_medmcqa_" + model + ".csv"  # 模型结果
-    merged_csv_path = data_folder + "results_medmcqa_" + model + "_merged.csv"
-    summary_json_path = data_folder + "subject_summary_medmcqa_" + model + ".json"
+    data_dir = Path(data_folder)
+    test_json_path = data_dir / "train.json"
+    result_csv_path = data_dir / f"results_medmcqa_{model}.csv"
+    merged_csv_path = data_dir / f"results_medmcqa_{model}_merged.csv"
+    summary_json_path = data_dir / f"subject_summary_medmcqa_{model}.json"
 
     # ---------- Load test metadata ----------
     test_data = load_json_or_jsonl(test_json_path)
 
-    # 构建 id → metadata 映射
+    # Build id → metadata mapping
     meta_map = {}
     for item in test_data:
         qid = item.get("id")
@@ -405,7 +405,7 @@ def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/v
     # ---------- Load model results ----------
     df = pd.read_csv(result_csv_path)
 
-    # 自动检测 id 列名
+    # Auto-detect id column
     id_col = None
     for c in df.columns:
         if c.lower() in ["id", "qid", "question_id"]:
@@ -419,7 +419,7 @@ def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/v
     df["topic_name"] = df[id_col].map(lambda x: meta_map.get(x, {}).get("topic_name", "Unknown"))
 
     # ---------- Compute Accuracy ----------
-    # 自动检测预测列和真实列（常见列名：pred, prediction, model_output, gold, answer, label）
+    # Auto-detect prediction and gold columns (common names: pred, prediction, model_output, gold, answer, label)
     pred_col = None
     gold_col = None
     for c in df.columns:
@@ -430,15 +430,15 @@ def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/v
     if pred_col is None or gold_col is None:
         raise ValueError("❌ Please make sure your CSV has 'pred' and 'gold' columns!")
 
-    # 去除空格、统一大小写再比较
+    # Compare predictions after trimming whitespace and normalizing case
     df["is_correct"] = df.apply(
         lambda r: str(r[pred_col]).strip().lower() == str(r[gold_col]).strip().lower(), axis=1
     )
 
-    # 整体准确率
+    # Overall accuracy
     overall_acc = df["is_correct"].mean()
 
-    # 按 subject_name 分组准确率
+    # Accuracy grouped by subject_name
     subject_stats = (
         df.groupby("subject_name")
         .agg(n_total=("is_correct", "size"),
@@ -476,29 +476,20 @@ def results_analysis(data_folder="/Users/hou00127/Google/Works/2025/Benchmarks/v
 
 
 def main():
-    # df = load_medmcqa(max_samples=MAX_SAMPLES)
-    # for idx in range(1, 6):
-    #     print(df.loc[idx, "question"].strip())
-    #     letters = "ABCD"
-    #     options = df.loc[idx, "options"]
-    #     print("\n".join([f"{letters[i]}. {opt}" for i, opt in enumerate(options)]))
-    #     print(df.loc[idx, "gold"])
+    import argparse
 
-    # df = load_medmcqa_stratified(split="train", samples_per_subject=200)
-    # print(len(df), "samples")
-    # print(df["subject"].value_counts())
-    #
-    # summaries = []
-    # for k_shot in [1, 5]:
-    #     for model in MODELS:
-    #         df_log, summary = eval_model_on_medqa(model, df, k_shot)
-    #         df_log.to_csv(f"results_medmcqa_{model}_{k_shot}.csv", index=False)
-    #         print(summary)
-    #         summaries.append(summary)
-    # with open("summary_medmcqa_k_shot.json", "w") as f:
-    #     json.dump(summaries, f, indent=2)
+    parser = argparse.ArgumentParser(description="MedMCQA evaluation and result analysis utilities.")
+    parser.add_argument("--analyze", action="store_true", help="Run result analysis instead of evaluation.")
+    parser.add_argument("--data-folder", type=Path, default=Path("data/MedMCQA"),
+                        help="Folder containing train.json and result CSVs for analysis.")
+    parser.add_argument("--analysis-model", type=str, default="gpt-4o",
+                        help="Model name used to locate result files when running analysis.")
+    args = parser.parse_args()
 
-    results_analysis(model="gpt-4o")
+    if args.analyze:
+        results_analysis(data_folder=args.data_folder, model=args.analysis_model)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":

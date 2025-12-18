@@ -1,0 +1,42 @@
+# Core ML/AI frameworks
+torch>=2.0.0
+transformers>=4.30.0
+numpy>=1.21.0
+
+# Data manipulation and analysis
+pandas>=1.3.0
+
+# Machine learning utilities
+scikit-learn>=1.0.0
+
+# OpenAI API
+openai>=1.0.0
+
+# Progress bars and CLI
+tqdm>=4.64.0
+
+# Natural language processing
+nltk>=3.8
+rouge-score>=0.1.2
+
+# Dataset loading
+datasets>=2.0.0
+
+# Quantization support
+bitsandbytes>=0.39.0
+
+# GPU acceleration (optional, for CUDA support)
+# accelerate>=0.20.0
+
+# Additional utilities for argument parsing and logging (built-in modules)
+# argparse - built-in
+# logging - built-in
+# json - built-in
+# time - built-in
+# os - built-in
+# collections - built-in
+
+# Development dependencies (optional)
+# jupyter>=1.0.0
+# matplotlib>=3.5.0
+# seaborn>=0.11.0

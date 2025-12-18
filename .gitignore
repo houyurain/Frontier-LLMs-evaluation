@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+
+# Environment
+venv/
+.env
+*.key
+secrets.yaml
+credentials.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+
+# Outputs
+logs/
+*.log
+results/
+outputs/
+checkpoints/
+
+# Generated
+slurm_scripts_*/
+*.out
+*.err
+
+# Models
+models/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+
+# Data
+datasets/
+data/
+*.hdf5
+*.parquet
+
+# Temporary
+*.tmp
+*.bak
+*_old.*
+*_backup.*
